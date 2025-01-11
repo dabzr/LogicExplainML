@@ -181,7 +181,6 @@ class XGBoostExplainer:
 
         importances = model.feature_importances_
         non_zero_indices = np.where(importances != 0)[0]
-        print(non_zero_indices)
 
         if reorder == "asc":
             sorted_feature_indices = non_zero_indices[np.argsort(importances[non_zero_indices])]
@@ -190,7 +189,6 @@ class XGBoostExplainer:
             sorted_feature_indices = non_zero_indices[np.argsort(-importances[non_zero_indices])]
             X = [X[i] for i in sorted_feature_indices]
 
-        print(sorted_feature_indices)
         for feature in X.copy():
             X.remove(feature)
 

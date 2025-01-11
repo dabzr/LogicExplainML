@@ -125,10 +125,10 @@ class Explainer:
         non_zero_indices = np.where(importances != 0)[0]
 
         if reorder == "asc":
-            sorted_feature_indices = np.argsort(non_zero_indices)
+            sorted_feature_indices = non_zero_indices[np.argsort(importances[non_zero_indices])]
             X = [X[i] for i in sorted_feature_indices]
         elif reorder == "desc":
-            sorted_feature_indices = np.argsort(np.flip(non_zero_indices))
+            sorted_feature_indices = non_zero_indices[np.argsort(-importances[non_zero_indices])]
             X = [X[i] for i in sorted_feature_indices]
 
         for feature in X.copy():

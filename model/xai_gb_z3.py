@@ -16,18 +16,30 @@ class Explainer:
 
         return self.explain_expression(self.I, self.T, self.D, self.model, reorder)
 
-    def feature_constraints_expression(self, X):
+    def feature_constraints_expression(self, X: np.ndarray):
+        """
+        Recebe um dataset e retorna uma fórmula no z3 com:
+        - Restrições de valor máximo e mínimo para features contínuas.
+        - Restrições de igualdade para features categóricas binárias.
+        """
+
         constraints = []
 
         for i in range(X.shape[1]):
             feature_values = X[:, i]
-            min_val, max_val = feature_values.min(), feature_values.max()
+            unique_values = np.unique(feature_values)
 
             x = Real(f"x{i}")
-            min = RealVal(min_val)
-            max = RealVal(max_val)
 
-            constraint = And(min <= x, x <= max)
+            if len(unique_values) == 2:
+                a, b = unique_values
+                constraint = Or(x == RealVal(a), x == RealVal(b))
+            else:
+                min_val, max_val = feature_values.min(), feature_values.max()
+                min_val_z3 = RealVal(min_val)
+                max_val_z3 = RealVal(max_val)
+                constraint = And(min_val_z3 <= x, x <= max_val_z3)
+
             constraints.append(constraint)
 
         return And(*constraints)

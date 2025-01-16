@@ -1,5 +1,5 @@
 from z3 import *
-
+import numpy as np
 
 class XGBoostExplainer:
     """Apenas classificação binária e base_score = None
@@ -194,3 +194,48 @@ class XGBoostExplainer:
             return True
         else:
             return False
+
+    def delta_expression(self, exp):
+        expressions = []
+        delta = Real('delta')
+
+        for name in exp:
+            tokens = name.split(" == ")
+            z3feature = Real(tokens[0])
+            value = tokens[1]
+            expressions.append(z3feature >= float(value) - delta)
+            expressions.append(z3feature <= float(value) + delta)  
+
+        expressions.append(delta >= 0)
+        return expressions
+    
+    def explain_range(self, instance, reorder="asc"):
+        set_option(rational_to_decimal=True) # fix this
+        
+        exp = self.explain(instance, reorder)
+        if exp != []:
+            expstr = []
+            for expression in exp:
+                expstr.append(str(expression))
+            self.delta_expressions = self.delta_expression(expstr)
+            
+            opt = Optimize()
+            opt.add(self.delta_expressions)
+            opt.add(self.T)
+            opt.add(Not(self.D))
+
+            delta = Real('delta')
+            expmin = opt.minimize(delta)
+            opt.check()
+
+            value = str(expmin.value())
+
+            if "+ epsilon" in value:
+                numeric_value = float(value.split(" + ")[0])
+            else:
+                numeric_value = float(value) - 0.01
+            
+            if numeric_value > 0.01:
+                return numeric_value
+        
+        return 0

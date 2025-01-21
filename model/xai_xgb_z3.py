@@ -1,6 +1,7 @@
 from z3 import *
 import numpy as np
 
+
 class XGBoostExplainer:
     """Apenas classificação binária e base_score = None
     data = X. labels = y
@@ -17,6 +18,8 @@ class XGBoostExplainer:
         self.model = model
         self.data = data.values
         self.columns = data.columns
+        self.categoric_features = []
+        self.max_categories = 3
         self.T_constraints = self.feature_constraints_expression(self.data)
         self.T_model = self.model_trees_expression(self.model)
         self.T = And(self.T_model, self.T_constraints)
@@ -43,10 +46,13 @@ class XGBoostExplainer:
             unique_values = np.unique(feature_values)
 
             x = Real(self.columns[i])
+            if len(unique_values) <= self.max_categories:
+                self.categoric_features.append(self.columns[i])
 
-            if len(unique_values) == 2:
-                a, b = unique_values
-                constraint = Or(x == RealVal(a), x == RealVal(b))
+                constraint = []
+                for unique_value in unique_values:
+                    constraint.append(x == RealVal(unique_value))
+                constraint = Or(constraint)
             else:
                 min_val, max_val = feature_values.min(), feature_values.max()
                 min_val_z3 = RealVal(min_val)
@@ -152,11 +158,12 @@ class XGBoostExplainer:
         return And(final_equation)
 
     def instance_expression(self, instance):
-        formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
+        formula = [Real(self.columns[i]) == value for i,
+                   value in enumerate(instance)]
         return formula
 
     def explain_expression(self, I, T, D, model, reorder):
-        X = I.copy()
+        i_expression = I.copy()
         T_s = simplify(T)
         D_s = simplify(D)
 
@@ -167,25 +174,25 @@ class XGBoostExplainer:
             sorted_feature_indices = non_zero_indices[
                 np.argsort(importances[non_zero_indices])
             ]
-            X = [X[i] for i in sorted_feature_indices]
+            i_expression = [i_expression[i] for i in sorted_feature_indices]
         elif reorder == "desc":
             sorted_feature_indices = non_zero_indices[
                 np.argsort(-importances[non_zero_indices])
             ]
-            X = [X[i] for i in sorted_feature_indices]
+            i_expression = [i_expression[i] for i in sorted_feature_indices]
 
-        for feature in X.copy():
-            X.remove(feature)
+        for feature in i_expression.copy():
+            i_expression.remove(feature)
 
-            # prove(Implies(And(And(X), T), D))
-            if self.is_proved(Implies(And(And(X), T_s), D_s)):
+            # prove(Implies(And(And(i_expression), T), D))
+            if self.is_proved(Implies(And(And(i_expression), T_s), D_s)):
                 continue
                 # print('proved')
             else:
                 # print('not proved')
-                X.append(feature)
+                i_expression.append(feature)
 
-        return X
+        return i_expression
 
     def is_proved(self, f):
         s = Solver()
@@ -203,22 +210,26 @@ class XGBoostExplainer:
             tokens = name.split(" == ")
             z3feature = Real(tokens[0])
             value = tokens[1]
-            expressions.append(z3feature >= float(value) - delta)
-            expressions.append(z3feature <= float(value) + delta)  
+
+            if tokens[0] in self.categoric_features:
+                expressions.append(z3feature == float(value))
+            else:
+                expressions.append(z3feature >= float(value) - delta)
+                expressions.append(z3feature <= float(value) + delta)
 
         expressions.append(delta >= 0)
         return expressions
-    
+
     def explain_range(self, instance, reorder="asc"):
-        set_option(rational_to_decimal=True) # fix this
-        
+        set_option(rational_to_decimal=True)  # fix this
+
         exp = self.explain(instance, reorder)
         if exp != []:
             expstr = []
             for expression in exp:
                 expstr.append(str(expression))
             self.delta_expressions = self.delta_expression(expstr)
-            
+
             opt = Optimize()
             opt.add(self.delta_expressions)
             opt.add(self.T)
@@ -234,8 +245,8 @@ class XGBoostExplainer:
                 numeric_value = float(value.split(" + ")[0])
             else:
                 numeric_value = float(value) - 0.01
-            
+
             if numeric_value > 0.01:
                 return numeric_value
-        
+
         return 0

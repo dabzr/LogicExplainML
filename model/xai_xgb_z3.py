@@ -1,7 +1,6 @@
 from z3 import *
 import numpy as np
 
-
 class XGBoostExplainer:
     """Apenas classificação binária e base_score = None
     data = X. labels = y
@@ -19,7 +18,7 @@ class XGBoostExplainer:
         self.data = data.values
         self.columns = data.columns
         self.categoric_features = []
-        self.max_categories = 3
+        self.max_categories = 2
         self.T_constraints = self.feature_constraints_expression(self.data)
         self.T_model = self.model_trees_expression(self.model)
         self.T = And(self.T_model, self.T_constraints)
@@ -51,7 +50,7 @@ class XGBoostExplainer:
 
                 constraint = []
                 for unique_value in unique_values:
-                    constraint.append(x == RealVal(unique_value))
+                  constraint.append(x == RealVal(unique_value))
                 constraint = Or(constraint)
             else:
                 min_val, max_val = feature_values.min(), feature_values.max()
@@ -158,8 +157,7 @@ class XGBoostExplainer:
         return And(final_equation)
 
     def instance_expression(self, instance):
-        formula = [Real(self.columns[i]) == value for i,
-                   value in enumerate(instance)]
+        formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
         return formula
 
     def explain_expression(self, I, T, D, model, reorder):
@@ -212,17 +210,15 @@ class XGBoostExplainer:
             value = tokens[1]
 
             if tokens[0] in self.categoric_features:
-                expressions.append(z3feature == float(value))
+              expressions.append(z3feature == float(value))
             else:
-                expressions.append(z3feature >= float(value) - delta)
-                expressions.append(z3feature <= float(value) + delta)
+              expressions.append(z3feature >= float(value) - delta)
+              expressions.append(z3feature <= float(value) + delta)
 
         expressions.append(delta >= 0)
         return expressions
 
     def explain_range(self, instance, reorder="asc"):
-        set_option(rational_to_decimal=True)  # fix this
-
         exp = self.explain(instance, reorder)
         if exp != []:
             expstr = []
@@ -246,7 +242,14 @@ class XGBoostExplainer:
             else:
                 numeric_value = float(value) - 0.01
 
-            if numeric_value > 0.01:
-                return numeric_value
+            range_exp = []
+            for item in exp:
+                if str(item.arg(0)) not in self.categoric_features:
+                  lower = round(float(item.arg(1).as_fraction()) - numeric_value, 6)
+                  upper = round(float(item.arg(1).as_fraction()) + numeric_value, 6)
+                  range_exp.append(f'{lower} <= {item.arg(0)} <= {upper}')
 
-        return 0
+                else:
+                  range_exp.append(f'{item.arg(0)} == {item.arg(1)}')
+
+        return range_exp

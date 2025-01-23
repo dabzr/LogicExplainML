@@ -25,10 +25,10 @@ class XGBoostExplainer:
         self.label_proportions = labels.mean()
 
     def explain(self, instance, reorder="asc"):
+        self.I = self.instance_expression(instance)
         self.D = self.decision_function_expression(
             self.model, [instance], self.label_proportions
         )
-        self.I = self.instance_expression(instance)
 
         return self.explain_expression(self.I, self.T, self.D, self.model, reorder)
 
@@ -75,6 +75,8 @@ class XGBoostExplainer:
             z3.ExprRef: Fórmula representando todos os caminhos de todas as árvores.
         """
         df = model.get_booster().trees_to_dataframe()
+        df['Split'] = df['Split'].round(4)
+        self.booster_df = df
         class_index = 0  # if model.n_classes_ == 2:
 
         all_tree_formulas = []
@@ -127,7 +129,21 @@ class XGBoostExplainer:
     def decision_function_expression(self, model, x, label_proportions):
         n_classes = 1 if model.n_classes_ <= 2 else model.n_classes_
         predicted_class = model.predict(x)[0]
-        init_value = label_proportions
+        n_estimators = len(model.get_booster().get_dump())
+
+        estimator_pred = Solver()
+        estimator_pred.add(self.I)
+        estimator_pred.add(self.T)
+        variables = [Real(f'o_{i}_0') for i in range(n_estimators)]
+        if estimator_pred.check() == sat:
+            solvermodel = estimator_pred.model()
+            total_sum = sum(float(solvermodel.eval(var).as_fraction()) for var in variables)
+        else:
+          total_sum = 0
+          print('estimator error')
+        init_value =  model.predict(x, output_margin=True)[0] - total_sum
+        # print('margin', model.predict(x, output_margin=True)[0], 'estsum', total_sum)
+        # print('init', init_value)
 
         equation_list = []
         for class_number in range(n_classes):
@@ -152,9 +168,9 @@ class XGBoostExplainer:
                     compare_equation.append(
                         equation_list[predicted_class] > equation_list[class_number]
                     )
-            final_equation = compare_equation
+            final_equation = And(compare_equation)
 
-        return And(final_equation)
+        return final_equation
 
     def instance_expression(self, instance):
         formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
@@ -162,8 +178,8 @@ class XGBoostExplainer:
 
     def explain_expression(self, I, T, D, model, reorder):
         i_expression = I.copy()
-        T_s = simplify(T)
-        D_s = simplify(D)
+        T_s = T
+        D_s = D
 
         importances = model.feature_importances_
         non_zero_indices = np.where(importances != 0)[0]
@@ -180,6 +196,7 @@ class XGBoostExplainer:
             i_expression = [i_expression[i] for i in sorted_feature_indices]
 
         for feature in i_expression.copy():
+
             i_expression.remove(feature)
 
             # prove(Implies(And(And(i_expression), T), D))

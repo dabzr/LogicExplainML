@@ -253,12 +253,14 @@ class XGBoostExplainer:
             opt.check()
 
             value = str(expmin.value())
-
             if "+ epsilon" in value:
                 numeric_value = float(value.split(" + ")[0])
+            elif "epsilon" == value:
+                numeric_value = 0
+                # print('delta == 0')
+                return exp
             else:
                 numeric_value = float(value) - 0.01
-
             range_exp = []
             for item in exp:
                 if str(item.arg(0)) not in self.categoric_features:

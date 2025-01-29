@@ -221,9 +221,11 @@ class XGBoostExplainer:
         expressions = []
         delta = Real('delta')
 
+        self.delta_features = []
         for name in exp:
             tokens = name.split(" == ")
             z3feature = Real(tokens[0])
+            self.delta_features.append(str(z3feature))
             value = tokens[1]
 
             if tokens[0] in self.categoric_features:
@@ -233,6 +235,7 @@ class XGBoostExplainer:
               expressions.append(z3feature <= float(value) + delta)
 
         expressions.append(delta >= 0)
+        self.deltaexp = expressions
         return expressions
 
     def explain_range(self, instance, reorder="asc"):
@@ -252,6 +255,8 @@ class XGBoostExplainer:
             expmin = opt.minimize(delta)
             opt.check()
 
+            rangemodel = opt.model()
+
             value = str(expmin.value())
             if "+ epsilon" in value:
                 numeric_value = float(value.split(" + ")[0])
@@ -260,15 +265,17 @@ class XGBoostExplainer:
                 # print('delta == 0')
                 return exp
             else:
-                numeric_value = float(value) - 0.01
+                numeric_value = float(value) - 0.0001
             range_exp = []
+
             for item in exp:
                 if str(item.arg(0)) not in self.categoric_features:
-                  lower = round(float(item.arg(1).as_fraction()) - numeric_value, 6)
-                  upper = round(float(item.arg(1).as_fraction()) + numeric_value, 6)
+                  lower = round(float(rangemodel[item.arg(0)].as_fraction()) - numeric_value, 2)
+                  upper = round(float(rangemodel[item.arg(0)].as_fraction()) + numeric_value, 2)
                   range_exp.append(f'{lower} <= {item.arg(0)} <= {upper}')
 
                 else:
                   range_exp.append(f'{item.arg(0)} == {item.arg(1)}')
-
-        return range_exp
+            return range_exp
+        else:
+          return exp

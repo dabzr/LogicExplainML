@@ -1,6 +1,7 @@
 from z3 import *
 import numpy as np
 
+
 class XGBoostExplainer:
     """Apenas classificação binária e base_score = None
     data = X. labels = y
@@ -50,7 +51,7 @@ class XGBoostExplainer:
 
                 constraint = []
                 for unique_value in unique_values:
-                  constraint.append(x == RealVal(unique_value))
+                    constraint.append(x == RealVal(unique_value))
                 constraint = Or(constraint)
             else:
                 min_val, max_val = feature_values.min(), feature_values.max()
@@ -137,11 +138,12 @@ class XGBoostExplainer:
         variables = [Real(f'o_{i}_0') for i in range(n_estimators)]
         if estimator_pred.check() == sat:
             solvermodel = estimator_pred.model()
-            total_sum = sum(float(solvermodel.eval(var).as_fraction()) for var in variables)
+            total_sum = sum(float(solvermodel.eval(var).as_fraction())
+                            for var in variables)
         else:
-          total_sum = 0
-          print('estimator error')
-        init_value =  model.predict(x, output_margin=True)[0] - total_sum
+            total_sum = 0
+            print('estimator error')
+        init_value = model.predict(x, output_margin=True)[0] - total_sum
         # print('margin', model.predict(x, output_margin=True)[0], 'estsum', total_sum)
         # print('init', init_value)
 
@@ -173,7 +175,8 @@ class XGBoostExplainer:
         return final_equation
 
     def instance_expression(self, instance):
-        formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
+        formula = [Real(self.columns[i]) == value for i,
+                   value in enumerate(instance)]
         return formula
 
     def explain_expression(self, I, T, D, model, reorder):
@@ -206,7 +209,7 @@ class XGBoostExplainer:
             else:
                 # print('not proved')
                 i_expression.append(feature)
-
+        # print(self.is_proved(Implies(And(And(i_expression), T_s), D_s)))
         return i_expression
 
     def is_proved(self, f):
@@ -229,10 +232,10 @@ class XGBoostExplainer:
             value = tokens[1]
 
             if tokens[0] in self.categoric_features:
-              expressions.append(z3feature == float(value))
+                expressions.append(z3feature == float(value))
             else:
-              expressions.append(z3feature >= float(value) - delta)
-              expressions.append(z3feature <= float(value) + delta)
+                expressions.append(z3feature >= float(value) - delta)
+                expressions.append(z3feature <= float(value) + delta)
 
         expressions.append(delta >= 0)
         self.deltaexp = expressions
@@ -258,24 +261,64 @@ class XGBoostExplainer:
             rangemodel = opt.model()
 
             value = str(expmin.value())
+            # print(value)
+
             if "+ epsilon" in value:
-                numeric_value = float(value.split(" + ")[0])
+                delta_value = float(value.split(" + ")[0])
             elif "epsilon" == value:
-                numeric_value = 0
-                # print('delta == 0')
-                return exp
+                delta_value = 0
+                expstr = []
+                for exppart in exp:
+                    expstr.append(str(exppart))
+                return expstr
             else:
-                numeric_value = float(value) - 0.0001
+                delta_value = float(value) - 0.01
             range_exp = []
 
-            for item in exp:
-                if str(item.arg(0)) not in self.categoric_features:
-                  lower = round(float(rangemodel[item.arg(0)].as_fraction()) - numeric_value, 2)
-                  upper = round(float(rangemodel[item.arg(0)].as_fraction()) + numeric_value, 2)
-                  range_exp.append(f'{lower} <= {item.arg(0)} <= {upper}')
+            # for declaration in rangemodel.decls():
+            #     if declaration.name() in self.delta_features:
+            #       print(f"{declaration.name()}: {rangemodel[declaration]}")
+            # print(delta_value)
 
+            for item in exp:
+                name = str(item.arg(0))
+                if name not in self.categoric_features:
+                    idx = list(self.columns).index(name)
+                    min_idx = np.min(self.data[:, idx])
+                    max_idx = np.max(self.data[:, idx])
+
+
+                    itemvalue = float(item.arg(1).as_fraction())
+
+                    lower = itemvalue - delta_value
+                    if lower < min_idx:
+                        lower = min_idx
+
+                    upper = itemvalue + delta_value
+                    if upper > max_idx:
+                        upper = max_idx
+
+                    # print(itemvalue, lower, upper)
+                    range_exp.append(f'{lower} <= {name} <= {upper}')
                 else:
-                  range_exp.append(f'{item.arg(0)} == {item.arg(1)}')
+                    range_exp.append(f'{name} == {item.arg(1)}')
+
+            # for item in exp:
+            #     if str(item.arg(0)) not in self.categoric_features:
+            #         test = opt.minimize(Real(str(item.arg(0))))
+            #         opt.check()
+            #         lower = float(str(test.value()))
+
+            #         test = opt.maximize(Real(str(item.arg(0))))
+            #         opt.check()
+            #         upper = float(str(test.value()))
+            #         # itemvalue = float(item.arg(1).as_fraction())
+            #         # lower = round(itemvalue - delta_value, 6)
+            #         # upper = round(itemvalue + delta_value, 2)
+            #         range_exp.append(f'{lower} <= {item.arg(0)} <= {upper}')
+            #     else:
+            #         range_exp.append(f'{item.arg(0)} == {item.arg(1)}')
+
             return range_exp
         else:
-          return exp
+            return exp

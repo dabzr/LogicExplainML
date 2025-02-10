@@ -7,7 +7,7 @@ class XGBoostExplainer:
     data = X. labels = y
     """
 
-    def __init__(self, model, data, labels):
+    def __init__(self, model, data):
         """_summary_
 
         Args:
@@ -17,51 +17,38 @@ class XGBoostExplainer:
         """
         self.model = model
         self.data = data.values
-        self.columns = data.columns
-        self.categoric_features = []
+        self.columns = model.feature_names_in_.tolist()
         self.max_categories = 2
-        self.T_constraints = self.feature_constraints_expression(self.data)
+
+    def fit(self):
+        """Initialize Z3 expressions from model and categoric features from data
+        """
+        self.categoric_features = self.get_categoric_features(self.data)
         self.T_model = self.model_trees_expression(self.model)
-        self.T = And(self.T_model, self.T_constraints)
-        self.label_proportions = labels.mean()
+        self.T = self.T_model
 
     def explain(self, instance, reorder="asc"):
         self.I = self.instance_expression(instance)
         self.D = self.decision_function_expression(
-            self.model, [instance], self.label_proportions
-        )
+            self.model, [instance])
 
         return self.explain_expression(self.I, self.T, self.D, self.model, reorder)
 
-    def feature_constraints_expression(self, X: np.ndarray):
+    def get_categoric_features(self, X: np.ndarray):
         """
         Recebe um dataset e retorna uma fórmula no z3 com:
         - Restrições de valor máximo e mínimo para features contínuas.
         - Restrições de igualdade para features categóricas binárias.
         """
-        constraints = []
-
+        categoric_features = []
         for i in range(X.shape[1]):
             feature_values = X[:, i]
             unique_values = np.unique(feature_values)
-
             x = Real(self.columns[i])
             if len(unique_values) <= self.max_categories:
-                self.categoric_features.append(self.columns[i])
+                categoric_features.append(self.columns[i])
 
-                constraint = []
-                for unique_value in unique_values:
-                    constraint.append(x == RealVal(unique_value))
-                constraint = Or(constraint)
-            else:
-                min_val, max_val = feature_values.min(), feature_values.max()
-                min_val_z3 = RealVal(min_val)
-                max_val_z3 = RealVal(max_val)
-                constraint = And(min_val_z3 <= x, x <= max_val_z3)
-
-            constraints.append(constraint)
-
-        return And(*constraints)
+        return categoric_features
 
     def model_trees_expression(self, model):
         """
@@ -127,7 +114,7 @@ class XGBoostExplainer:
 
         return And(*all_tree_formulas)
 
-    def decision_function_expression(self, model, x, label_proportions):
+    def decision_function_expression(self, model, x):
         n_classes = 1 if model.n_classes_ <= 2 else model.n_classes_
         predicted_class = model.predict(x)[0]
         n_estimators = len(model.get_booster().get_dump())
@@ -275,18 +262,12 @@ class XGBoostExplainer:
                 delta_value = float(value) - 0.01
             range_exp = []
 
-            # for declaration in rangemodel.decls():
-            #     if declaration.name() in self.delta_features:
-            #       print(f"{declaration.name()}: {rangemodel[declaration]}")
-            # print(delta_value)
-
             for item in exp:
                 name = str(item.arg(0))
                 if name not in self.categoric_features:
                     idx = list(self.columns).index(name)
                     min_idx = np.min(self.data[:, idx])
                     max_idx = np.max(self.data[:, idx])
-
 
                     itemvalue = float(item.arg(1).as_fraction())
 
@@ -298,26 +279,9 @@ class XGBoostExplainer:
                     if upper > max_idx:
                         upper = max_idx
 
-                    # print(itemvalue, lower, upper)
                     range_exp.append(f'{lower} <= {name} <= {upper}')
                 else:
                     range_exp.append(f'{name} == {item.arg(1)}')
-
-            # for item in exp:
-            #     if str(item.arg(0)) not in self.categoric_features:
-            #         test = opt.minimize(Real(str(item.arg(0))))
-            #         opt.check()
-            #         lower = float(str(test.value()))
-
-            #         test = opt.maximize(Real(str(item.arg(0))))
-            #         opt.check()
-            #         upper = float(str(test.value()))
-            #         # itemvalue = float(item.arg(1).as_fraction())
-            #         # lower = round(itemvalue - delta_value, 6)
-            #         # upper = round(itemvalue + delta_value, 2)
-            #         range_exp.append(f'{lower} <= {item.arg(0)} <= {upper}')
-            #     else:
-            #         range_exp.append(f'{item.arg(0)} == {item.arg(1)}')
 
             return range_exp
         else:

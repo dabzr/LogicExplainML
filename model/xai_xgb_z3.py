@@ -21,7 +21,8 @@ class XGBoostExplainer:
         self.max_categories = 2
 
     def fit(self):
-        """Initialize Z3 expressions from model and categoric features from data
+        """Initialize Z3 expressions from model and categoric features from data.
+        z3 expressions are built here for pkl compatibility (use fit after export pkl)
         """
         self.categoric_features = self.get_categoric_features(self.data)
         self.T_model = self.model_trees_expression(self.model)
@@ -29,22 +30,20 @@ class XGBoostExplainer:
 
     def explain(self, instance, reorder="asc"):
         self.I = self.instance_expression(instance)
-        self.D = self.decision_function_expression(
-            self.model, [instance])
+        self.D = self.decision_function_expression(self.model, [instance])
 
         return self.explain_expression(self.I, self.T, self.D, self.model, reorder)
 
-    def get_categoric_features(self, X: np.ndarray):
+    def get_categoric_features(self, data: np.ndarray):
         """
         Recebe um dataset e retorna uma fórmula no z3 com:
         - Restrições de valor máximo e mínimo para features contínuas.
         - Restrições de igualdade para features categóricas binárias.
         """
         categoric_features = []
-        for i in range(X.shape[1]):
-            feature_values = X[:, i]
+        for i in range(data.shape[1]):
+            feature_values = data[:, i]
             unique_values = np.unique(feature_values)
-            x = Real(self.columns[i])
             if len(unique_values) <= self.max_categories:
                 categoric_features.append(self.columns[i])
 
@@ -63,10 +62,9 @@ class XGBoostExplainer:
             z3.ExprRef: Fórmula representando todos os caminhos de todas as árvores.
         """
         df = model.get_booster().trees_to_dataframe()
-        df['Split'] = df['Split'].round(4)
+        df["Split"] = df["Split"].round(4)
         self.booster_df = df
         class_index = 0  # if model.n_classes_ == 2:
-
         all_tree_formulas = []
 
         for tree_index in df["Tree"].unique():
@@ -77,7 +75,6 @@ class XGBoostExplainer:
                 leaf_value = tree_df.iloc[0]["Gain"]
                 all_tree_formulas.append(And(o == leaf_value))
                 continue
-
             path_formulas = []
 
             def get_conditions(node_id):
@@ -111,7 +108,6 @@ class XGBoostExplainer:
                 path_formulas.append(implication)
 
             all_tree_formulas.append(And(*path_formulas))
-
         return And(*all_tree_formulas)
 
     def decision_function_expression(self, model, x):
@@ -122,17 +118,16 @@ class XGBoostExplainer:
         estimator_pred = Solver()
         estimator_pred.add(self.I)
         estimator_pred.add(self.T)
-        variables = [Real(f'o_{i}_0') for i in range(n_estimators)]
+        variables = [Real(f"o_{i}_0") for i in range(n_estimators)]
         if estimator_pred.check() == sat:
             solvermodel = estimator_pred.model()
-            total_sum = sum(float(solvermodel.eval(var).as_fraction())
-                            for var in variables)
+            total_sum = sum(
+                float(solvermodel.eval(var).as_fraction()) for var in variables
+            )
         else:
             total_sum = 0
-            print('estimator error')
+            print("estimator error")
         init_value = model.predict(x, output_margin=True)[0] - total_sum
-        # print('margin', model.predict(x, output_margin=True)[0], 'estsum', total_sum)
-        # print('init', init_value)
 
         equation_list = []
         for class_number in range(n_classes):
@@ -162,8 +157,7 @@ class XGBoostExplainer:
         return final_equation
 
     def instance_expression(self, instance):
-        formula = [Real(self.columns[i]) == value for i,
-                   value in enumerate(instance)]
+        formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
         return formula
 
     def explain_expression(self, I, T, D, model, reorder):
@@ -209,7 +203,7 @@ class XGBoostExplainer:
 
     def delta_expression(self, exp):
         expressions = []
-        delta = Real('delta')
+        delta = Real("delta")
 
         self.delta_features = []
         for name in exp:
@@ -228,61 +222,69 @@ class XGBoostExplainer:
         self.deltaexp = expressions
         return expressions
 
-    def explain_range(self, instance, reorder="asc"):
+    def get_delta(self, exp):
+        expstr = []
+        for expression in exp:
+            expstr.append(str(expression))
+        self.delta_expressions = self.delta_expression(expstr)
+        
+        opt = Optimize()
+        opt.add(self.delta_expressions)
+        opt.add(self.T)
+        opt.add(Not(self.D))
+
+        delta = Real("delta")
+        expmin = opt.minimize(delta)
+        opt.check()
+
+        # rangemodel = opt.model()
+
+        value = str(expmin.value())
+
+        if "+ epsilon" in value:
+            delta_value = float(value.split(" + ")[0])
+        elif "epsilon" == value:
+            delta_value = 0
+        else:
+            delta_value = float(value) - 0.01
+        return delta_value
+
+    def explain_range(self, instance, reorder="asc", dataset_bounds=True, ):
         exp = self.explain(instance, reorder)
         if exp != []:
-            expstr = []
-            for expression in exp:
-                expstr.append(str(expression))
-            self.delta_expressions = self.delta_expression(expstr)
-
-            opt = Optimize()
-            opt.add(self.delta_expressions)
-            opt.add(self.T)
-            opt.add(Not(self.D))
-
-            delta = Real('delta')
-            expmin = opt.minimize(delta)
-            opt.check()
-
-            rangemodel = opt.model()
-
-            value = str(expmin.value())
-            # print(value)
-
-            if "+ epsilon" in value:
-                delta_value = float(value.split(" + ")[0])
-            elif "epsilon" == value:
-                delta_value = 0
+            delta_value = self.get_delta(exp)
+            
+            if delta_value == 0:
                 expstr = []
                 for exppart in exp:
                     expstr.append(str(exppart))
                 return expstr
-            else:
-                delta_value = float(value) - 0.01
-            range_exp = []
+            # save_deltas for model comparison
 
+            range_exp = []
             for item in exp:
                 name = str(item.arg(0))
                 if name not in self.categoric_features:
-                    idx = list(self.columns).index(name)
-                    min_idx = np.min(self.data[:, idx])
-                    max_idx = np.max(self.data[:, idx])
-
                     itemvalue = float(item.arg(1).as_fraction())
-
                     lower = itemvalue - delta_value
-                    if lower < min_idx:
-                        lower = min_idx
-
                     upper = itemvalue + delta_value
-                    if upper > max_idx:
-                        upper = max_idx
 
-                    range_exp.append(f'{lower} <= {name} <= {upper}')
+                    if dataset_bounds == True:
+                        idx = list(self.columns).index(name)
+                        min_idx = np.min(self.data[:, idx])
+                        max_idx = np.max(self.data[:, idx])
+                        if lower < min_idx:
+                            lower = min_idx
+                        if upper > max_idx:
+                            upper = max_idx
+
+                    range_exp.append(f"{lower} <= {name} <= {upper}")
                 else:
-                    range_exp.append(f'{name} == {item.arg(1)}')
+                    range_exp.append(f"{name} == {item.arg(1)}")
 
             return range_exp
         else:
             return exp
+        
+    def explain_range_other():
+        pass

@@ -24,6 +24,8 @@ class XGBoostExplainer:
         """Initialize Z3 expressions from model and categoric features from data.
         z3 expressions are built here for pkl compatibility (use fit after export pkl)
         """
+        set_option(rational_to_decimal=True)
+        
         self.categoric_features = self.get_categoric_features(self.data)
         self.T_model = self.model_trees_expression(self.model)
         self.T = self.T_model

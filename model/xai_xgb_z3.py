@@ -49,6 +49,14 @@ class XGBoostExplainer:
 
         return categoric_features
 
+    def feature_constraints(self, constraints=[]):
+        """TODO
+        esperado receber limites das features pelo usuário
+        formato previso: matriz/dataframe [feaature, min/max, valor]
+        constraaint_expression = "constraaint_df_to_feature()"
+        """
+        return
+
     def model_trees_expression(self, model):
         """
         Constrói expressões lógicas para todas as árvores de decisão em um dataframe de XGBoost.
@@ -201,90 +209,153 @@ class XGBoostExplainer:
         else:
             return False
 
-    def delta_expression(self, exp):
-        expressions = []
-        delta = Real("delta")
+    def delta_expression(self, expression):
+        # print(delta_expressions)
+        return  # delta_expressions
 
-        self.delta_features = []
-        for name in exp:
-            tokens = name.split(" == ")
-            z3feature = Real(tokens[0])
-            self.delta_features.append(str(z3feature))
-            value = tokens[1]
+    def get_deltas(self, exp):
 
-            if tokens[0] in self.categoric_features:
-                expressions.append(z3feature == float(value))
-            else:
-                expressions.append(z3feature >= float(value) - delta)
-                expressions.append(z3feature <= float(value) + delta)
-
-        expressions.append(delta >= 0)
-        self.deltaexp = expressions
-        return expressions
-
-    def get_delta(self, exp):
-        expstr = []
         for expression in exp:
-            expstr.append(str(expression))
-        self.delta_expressions = self.delta_expression(expstr)
-        
-        opt = Optimize()
-        opt.add(self.delta_expressions)
-        opt.add(self.T)
-        opt.add(Not(self.D))
+            if str(expression.arg(0)) in self.categoric_features:
+                self.caterogic_expressions.append(expression)
+                exp = list(filter(lambda expr: not expr.eq(expression), exp))
+            else:
+                self.cumulative_range_expresson.append(expression)
 
-        delta = Real("delta")
-        expmin = opt.minimize(delta)
-        opt.check()
+        delta_list = []
+        for expression in exp:
 
-        # rangemodel = opt.model()
+            self.cumulative_range_expresson = list(
+                filter(
+                    lambda expr: not expr.eq(expression),
+                    self.cumulative_range_expresson,
+                )
+            )
+            lower_min, upper_min = self.optmize_delta(expression)
 
-        value = str(expmin.value())
+            if lower_min != None:
+                delta_value_lower = self.get_delta_value(str(lower_min.value()))
+                self.cumulative_range_expresson.append(
+                    expression.arg(0) >= expression.arg(1) - delta_value_lower
+                )
+            else:
+                # print("unsat == open range lower")
+                delta_value_lower = None
 
+            if upper_min != None:
+                delta_value_upper = self.get_delta_value(str(upper_min.value()))
+                self.cumulative_range_expresson.append(
+                    expression.arg(0) <= expression.arg(1) + delta_value_upper
+                )
+            else:
+                # print("unsat == open range upper")
+                delta_value_upper = None
+
+            # print(expression, delta_value_lower, delta_value_upper)
+            delta_list.append([expression, delta_value_lower, delta_value_upper])
+
+        self.delta_list = delta_list
+        return delta_list
+
+    def get_delta_value(self, value):
         if "+ epsilon" in value:
             delta_value = float(value.split(" + ")[0])
         elif "epsilon" == value:
             delta_value = 0
+        elif "0" == value:
+            print("ERROR: delta == 0, explanation incorrect?")
+            delta_value = 0
         else:
-            delta_value = float(value) - 0.01
+            delta_value = round(float(value) - 0.01, 2)
+
         return delta_value
 
-    def explain_range(self, instance, reorder="asc", dataset_bounds=True, ):
+    def optmize_delta(self, expression):
+        delta_upper = Real("delta_upper")
+        delta_lower = Real("delta_lower")
+
+        self.delta_features = []
+
+        delta_expressions = []
+        delta_expressions.append(expression.arg(0) >= expression.arg(1) - delta_lower)
+        delta_expressions.append(expression.arg(0) <= expression.arg(1) + delta_upper)
+
+        self.delta_expressions = delta_expressions
+
+        expression_list = []
+        expression_list.append(And(self.cumulative_range_expresson))
+        expression_list.append(And(self.caterogic_expressions))
+        expression_list.append(And(self.delta_expressions))
+        expression_list.append(self.T)
+        expression_list.append(Not(self.D))
+        expression_list.append(delta_upper >= 0)
+        expression_list.append(delta_lower >= 0)
+
+        opt_lower = Optimize()
+        opt_lower.add(And(expression_list))
+        opt_lower.add(delta_upper == 0)
+        lower_min = opt_lower.minimize(delta_lower)
+        if opt_lower.check() != sat:
+            # print("lower unsat")
+            lower_min = None
+
+        opt_upper = Optimize()
+        opt_upper.add(And(expression_list))
+        opt_upper.add(delta_lower == 0)
+        upper_min = opt_upper.minimize(delta_upper)
+        if opt_upper.check() != sat:
+            # print("upper unsat")
+            upper_min = None
+
+        return lower_min, upper_min
+
+    def explain_range(
+        self,
+        instance,
+        reorder="asc",
+        dataset_bounds=True,
+    ):
+        self.cumulative_range_expresson = []
+        self.caterogic_expressions = []
+        self.range_metric = 0
         exp = self.explain(instance, reorder)
         if exp != []:
-            delta_value = self.get_delta(exp)
-            
-            if delta_value == 0:
-                expstr = []
-                for exppart in exp:
-                    expstr.append(str(exppart))
-                return expstr
-            # save_deltas for model comparison
-
+            delta_list = self.get_deltas(exp)
             range_exp = []
-            for item in exp:
-                name = str(item.arg(0))
-                if name not in self.categoric_features:
-                    itemvalue = float(item.arg(1).as_fraction())
-                    lower = itemvalue - delta_value
-                    upper = itemvalue + delta_value
+            for expression, delta_lower, delta_upper in delta_list:
+                expname = str(expression.arg(0))
 
-                    if dataset_bounds == True:
-                        idx = list(self.columns).index(name)
-                        min_idx = np.min(self.data[:, idx])
-                        max_idx = np.max(self.data[:, idx])
-                        if lower < min_idx:
-                            lower = min_idx
-                        if upper > max_idx:
-                            upper = max_idx
+                expvalue = float(expression.arg(1).as_fraction())
+                lower = None
+                upper = None
+                if delta_lower is not None:
+                    lower = round(expvalue - delta_lower, 2)
+                if delta_upper is not None:
+                    upper = round(expvalue + delta_upper, 2)
 
-                    range_exp.append(f"{lower} <= {name} <= {upper}")
+                if dataset_bounds == True:
+                    idx = list(self.columns).index(expname)
+                    min_idx = np.min(self.data[:, idx])
+                    max_idx = np.max(self.data[:, idx])
+                    if lower is not None and lower < min_idx:
+                        lower = min_idx
+                    if upper is not None and upper > max_idx:
+                        upper = max_idx
+
+                    # self.range_metric += (upper - lower)
+                if lower == upper:
+                    range_exp.append(f"{expression.arg(0)} == {expression.arg(1)}")
                 else:
-                    range_exp.append(f"{name} == {item.arg(1)}")
+                    if lower is None:
+                        range_exp.append(f"{expname} <= {upper}")
+                    elif upper is None:
+                        range_exp.append(f"{lower} <= {expname}")
+                    else:
+                        range_exp.append(f"{lower} <= {expname} <= {upper}")
+
+            for expression in self.caterogic_expressions:
+                range_exp.append(f"{expression.arg(0)} == {expression.arg(1)}")
 
             return range_exp
         else:
             return exp
-        
-    def explain_range_other():
-        pass

@@ -17,7 +17,7 @@ class XGBoostExplainer:
         """
         self.model = model
         self.data = data.values
-        self.columns = model.feature_names_in_.tolist()
+        self.columns = data.columns
         self.max_categories = 2
 
     def fit(self):
@@ -25,7 +25,7 @@ class XGBoostExplainer:
         z3 expressions are built here for pkl compatibility (use fit after export pkl)
         """
         set_option(rational_to_decimal=True)
-        
+
         self.categoric_features = self.get_categoric_features(self.data)
         self.T_model = self.model_trees_expression(self.model)
         self.T = self.T_model
@@ -33,7 +33,6 @@ class XGBoostExplainer:
     def explain(self, instance, reorder="asc"):
         self.I = self.instance_expression(instance)
         self.D = self.decision_function_expression(self.model, [instance])
-
         return self.explain_expression(self.I, self.T, self.D, self.model, reorder)
 
     def get_categoric_features(self, data: np.ndarray):
@@ -167,6 +166,7 @@ class XGBoostExplainer:
         return final_equation
 
     def instance_expression(self, instance):
+        print(instance)
         formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
         return formula
 
@@ -236,6 +236,7 @@ class XGBoostExplainer:
             lower_min, upper_min = self.optmize_delta(expression)
 
             if lower_min != None:
+                print("feature: ", expression.arg(0))
                 delta_value_lower = self.get_delta_value(str(lower_min.value()))
                 self.cumulative_range_expresson.append(
                     expression.arg(0) >= expression.arg(1) - delta_value_lower
@@ -265,7 +266,7 @@ class XGBoostExplainer:
         elif "epsilon" == value:
             delta_value = 0
         elif "0" == value:
-            print("ERROR: delta == 0, explanation incorrect?")
+            print("ERROR: delta == 0, explanation is incorrect")
             delta_value = 0
         else:
             delta_value = round(float(value) - 0.01, 2)
@@ -311,16 +312,12 @@ class XGBoostExplainer:
 
         return lower_min, upper_min
 
-    def explain_range(
-        self,
-        instance,
-        reorder="asc",
-        dataset_bounds=True,
-    ):
+    def explain_range(self, instance, reorder="asc", dataset_bounds=True, exp=None):
         self.cumulative_range_expresson = []
         self.caterogic_expressions = []
         self.range_metric = 0
-        exp = self.explain(instance, reorder)
+        if exp == None:
+            exp = self.explain(instance, reorder)
         if exp != []:
             delta_list = self.get_deltas(exp)
             range_exp = []

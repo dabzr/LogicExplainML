@@ -71,6 +71,10 @@ class XGBoostExplainer:
             z3.ExprRef: Fórmula representando todos os caminhos de todas as árvores.
         """
         df = model.get_booster().trees_to_dataframe()
+        if model.get_booster().feature_names == None:
+            feature_map = {f"f{i}": col for i, col in enumerate(self.columns)}
+            df["Feature"] = df["Feature"].replace(feature_map)
+
         df["Split"] = df["Split"].round(4)
         self.booster_df = df
         class_index = 0  # if model.n_classes_ == 2:
@@ -137,6 +141,7 @@ class XGBoostExplainer:
             total_sum = 0
             print("estimator error")
         init_value = model.predict(x, output_margin=True)[0] - total_sum
+        # print("init:", round(init_value, 2))
 
         equation_list = []
         for class_number in range(n_classes):
@@ -166,7 +171,6 @@ class XGBoostExplainer:
         return final_equation
 
     def instance_expression(self, instance):
-        print(instance)
         formula = [Real(self.columns[i]) == value for i, value in enumerate(instance)]
         return formula
 
@@ -216,7 +220,12 @@ class XGBoostExplainer:
         return  # delta_expressions
 
     def get_deltas(self, exp):
-
+        if exp and isinstance(exp[0], str):
+            expz3 = []
+            for token in exp:
+                tokens = token.split(" == ")
+                expz3.append(Real(tokens[0]) == (tokens[1]))
+            exp = expz3
         for expression in exp:
             if str(expression.arg(0)) in self.categoric_features:
                 self.caterogic_expressions.append(expression)
@@ -236,7 +245,6 @@ class XGBoostExplainer:
             lower_min, upper_min = self.optmize_delta(expression)
 
             if lower_min != None:
-                print("feature: ", expression.arg(0))
                 delta_value_lower = self.get_delta_value(str(lower_min.value()))
                 self.cumulative_range_expresson.append(
                     expression.arg(0) >= expression.arg(1) - delta_value_lower
@@ -348,7 +356,7 @@ class XGBoostExplainer:
                     if lower is None:
                         range_exp.append(f"{expname} <= {upper}")
                     elif upper is None:
-                        range_exp.append(f"{lower} <= {expname}")
+                        range_exp.append(f"{expname} >= {lower}")
                     else:
                         range_exp.append(f"{lower} <= {expname} <= {upper}")
 
@@ -358,3 +366,4 @@ class XGBoostExplainer:
             return range_exp
         else:
             return exp
+
